@@ -78,6 +78,15 @@ impl Shell {
         }
     }
 
+    fn handle_exclamations(&mut self, cmd_line: &str) {
+        let mut last_command : ~str = ~"";
+        {
+            last_command = self.history[self.history.len()-2].trim().to_owned();
+        }
+        last_command = cmd_line.replace("!!", last_command);
+        self.run_cmdline(last_command);
+    }
+
     fn get_output_redirects(&mut self, cmd_line: &str) -> ~[&str] {
         /*
         *   Get the output redirect filenames designated by >
@@ -239,6 +248,10 @@ impl Shell {
         let input_redirects : ~[&str] = self.get_input_redirect(cmd_line);
         let pipes : ~[&str] = self.get_pipes(cmd_line);
 
+        if cmd_line.contains("!!") {
+            self.handle_exclamations(cmd_line);
+        }
+
         if run_in_background {
             self.run_cmdline_in_background(cmd_line.clone());
         } else if pipes.len() > 0 {    
@@ -299,7 +312,6 @@ impl Shell {
         else {
             let mut argv: ~[~str] =
                 cmd_line.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
-
             if( argv[0] == ~"cd" ) {
                 self.change_directory(cmd_line);
             } else if( argv[0] == ~"history" ) {
