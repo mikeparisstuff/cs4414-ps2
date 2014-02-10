@@ -18,8 +18,8 @@ use std::io::stdio::stdin;
 use std::run::{Process, ProcessOptions};
 use std::io::{File, Open, Read, Write};
 use std::path::posix::Path;
-use std::libc::{fileno, fopen, pid_t, c_int};
 use std::libc;
+use std::str;
 use std::io::signal::{Listener, Interrupt};
 use extra::getopts;
 
@@ -98,7 +98,7 @@ impl Shell {
             files.remove(0);
             for elem in files.iter() {
                 if elem.contains(">") {
-                    let mut outs: ~[&str] = elem.split('>').collect();
+                    let outs: ~[&str] = elem.split('>').collect();
                     let inputf : &str = outs[0];
                     input_files.push(inputf.trim());
                 } else {
@@ -113,7 +113,7 @@ impl Shell {
         let mut pipes : ~[&str] = ~[];
         if cmd_line.contains("|") {
             let mut temp : ~[&str] = cmd_line.split('|').collect();
-            temp.remove(0);
+            // temp.remove(0);
             pipes = temp.clone();
         }
         pipes
@@ -237,10 +237,32 @@ impl Shell {
         let run_in_background : bool = self.should_run_in_background(cmd_line.clone());
         let output_redirects = self.get_output_redirects(cmd_line);
         let input_redirects : ~[&str] = self.get_input_redirect(cmd_line);
+        let pipes : ~[&str] = self.get_pipes(cmd_line);
 
         if run_in_background {
             self.run_cmdline_in_background(cmd_line.clone());
-        } 
+        } else if pipes.len() > 0 {    
+            let mut pipes_commands = pipes.clone();
+
+            let command = pipes_commands.remove(0).trim();
+
+            let mut argv: ~[~str] =
+                command.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
+            let program = argv.remove(0);
+
+            // We need to make the output of command be fed into the input of the rest of the
+            // argv. This command freezes the output
+            let output = run::process_output(program, argv);
+
+            let mut input_to_next_pipe: ~[u8] = ~[];
+            for x in output.iter() {
+                input_to_next_pipe = x.output.clone();
+            }
+
+            self.run_cmd_with_pipes(pipes_commands , input_to_next_pipe);
+
+
+        }
         else if input_redirects.len() > 0 {
             let temp_split : ~[&str] = cmd_line.split('<').collect();
             let cmd_line_sans_redirects = temp_split[0];
@@ -330,6 +352,44 @@ impl Shell {
             });
         } else {
             println!("{:s}: command not found", program);   
+        }
+    }
+
+    fn run_cmd_with_pipes(&mut self, mut remaining_commands: ~[&str], input: ~[u8]) {
+        // Recursively exhaust the pipes
+
+        if remaining_commands.len() == 0 {
+            return;
+        }
+        let command : &str = remaining_commands.remove(0);
+        let mut argv: ~[~str] =
+                command.split(' ').filter_map(|x| if x != "" { Some(x.to_owned()) } else { None }).to_owned_vec();
+
+        let program = argv.remove(0);
+
+        if self.cmd_exists(program) {
+            let mut output: ~[u8] = ~[];
+            match Process::new(program, argv, ProcessOptions::new()) {
+                Some(mut p) => {
+                    {
+                        let process = &mut p;
+                        let writer = process.input();
+                        writer.write(input);
+                    }
+                    
+                    let process_output = p.finish_with_output();
+                    output = process_output.output.clone();
+                },
+                None => fail!("Piping Error!")
+            }
+
+            if remaining_commands.len() == 0 {
+                println!("{}", str::from_utf8(output));
+            }
+            self.run_cmd_with_pipes(remaining_commands, output);
+        }
+        else {
+            println!("{:s}: command not found", program);
         }
     }
     
